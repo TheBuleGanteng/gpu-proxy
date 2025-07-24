@@ -1,6 +1,6 @@
 """
 Generic PyTorch Handler for RunPod Serverless
-Supports basic model training, evaluation, and inference operations
+Supports basic model training, evaluation, inference, and GPU verification operations
 """
 
 import runpod
@@ -10,6 +10,7 @@ import torch.optim as optim
 import base64
 import pickle
 import json
+import time
 from pathlib import Path
 
 # Simple logging for serverless environment
@@ -32,6 +33,125 @@ logger = setup_logger()
 
 # Global device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def get_gpu_info():
+    """
+    Get comprehensive GPU information
+    
+    Returns:
+        dict: GPU information including availability, specifications, and test results
+    """
+    logger.debug("running get_gpu_info ... gathering GPU information")
+    
+    gpu_info = {
+        "cuda_available": torch.cuda.is_available(),
+        "device_name": str(device),
+        "pytorch_version": torch.__version__
+    }
+    
+    if torch.cuda.is_available():
+        gpu_info.update({
+            "gpu_count": torch.cuda.device_count(),
+            "gpu_name": torch.cuda.get_device_name(0),
+            "cuda_version": torch.version.cuda, # type: ignore
+            "cudnn_version": torch.backends.cudnn.version(),
+            "current_device": torch.cuda.current_device(),
+            "memory_allocated": torch.cuda.memory_allocated(0),
+            "memory_reserved": torch.cuda.memory_reserved(0)
+        })
+        
+        # Run CUDA functionality tests
+        try:
+            # Test 1: Basic tensor creation and movement
+            test_tensor = torch.randn(1000, 1000).to(device)
+            gpu_info["tensor_creation_test"] = "PASSED"
+            
+            # Test 2: Basic computation
+            result = torch.matmul(test_tensor, test_tensor.T)
+            gpu_info["computation_test"] = "PASSED"
+            
+            # Test 3: Memory allocation test
+            large_tensor = torch.randn(5000, 5000).to(device)
+            del large_tensor
+            torch.cuda.empty_cache()
+            gpu_info["memory_test"] = "PASSED"
+            
+            # Test 4: Neural network operations
+            test_model = nn.Linear(1000, 100).to(device)
+            test_input = torch.randn(32, 1000).to(device)
+            test_output = test_model(test_input)
+            gpu_info["neural_network_test"] = "PASSED"
+            
+            del test_tensor, result, test_model, test_input, test_output
+            torch.cuda.empty_cache()
+            
+        except Exception as e:
+            gpu_info["cuda_test_error"] = str(e)
+            gpu_info["cuda_tests_status"] = "FAILED"
+    else:
+        gpu_info["cuda_tests_status"] = "SKIPPED - No CUDA available"
+    
+    return gpu_info
+
+def run_performance_benchmark():
+    """
+    Run a performance benchmark to test GPU vs CPU performance
+    
+    Returns:
+        dict: Benchmark results with timing information
+    """
+    logger.debug("running run_performance_benchmark ... running performance tests")
+    
+    benchmark_results = {
+        "device": str(device),
+        "cuda_available": torch.cuda.is_available()
+    }
+    
+    # Test matrix multiplication performance
+    try:
+        matrix_size = 2000
+        
+        # Create test matrices
+        start_time = time.time()
+        a = torch.randn(matrix_size, matrix_size).to(device)
+        b = torch.randn(matrix_size, matrix_size).to(device)
+        creation_time = time.time() - start_time
+        
+        # Perform matrix multiplication
+        start_time = time.time()
+        result = torch.matmul(a, b)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()  # Wait for GPU computation to complete
+        computation_time = time.time() - start_time
+        
+        benchmark_results.update({
+            "matrix_size": matrix_size,
+            "creation_time_ms": creation_time * 1000,
+            "computation_time_ms": computation_time * 1000,
+            "operations_per_second": (matrix_size ** 3) / computation_time,
+            "benchmark_status": "COMPLETED"
+        })
+        
+        # Performance analysis
+        if torch.cuda.is_available() and computation_time < 0.5:
+            benchmark_results["performance_assessment"] = "GPU_ACCELERATED"
+        elif computation_time > 2.0:
+            benchmark_results["performance_assessment"] = "CPU_LIKELY"
+        else:
+            benchmark_results["performance_assessment"] = "UNCLEAR"
+        
+        # Cleanup
+        del a, b, result
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
+    except Exception as e:
+        benchmark_results.update({
+            "benchmark_error": str(e),
+            "benchmark_status": "FAILED"
+        })
+    
+    return benchmark_results
 
 def create_model_from_config(model_config):
     """
@@ -185,6 +305,10 @@ def train_single_epoch(model, data_config, hyperparams):
     loss.backward()
     optimizer.step()
     
+    # Wait for GPU operations to complete
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    
     # Calculate metrics
     with torch.no_grad():
         predicted = torch.argmax(outputs, dim=1)
@@ -193,7 +317,9 @@ def train_single_epoch(model, data_config, hyperparams):
     metrics = {
         "loss": loss.item(),
         "accuracy": accuracy,
-        "samples_processed": len(features)
+        "samples_processed": len(features),
+        "device_used": str(device),
+        "cuda_available": torch.cuda.is_available()
     }
     
     logger.debug(f"running train_single_epoch ... epoch complete, loss: {loss.item():.4f}, accuracy: {accuracy:.4f}")
@@ -228,14 +354,16 @@ def evaluate_model(model, data_config):
             metrics = {
                 "loss": loss,
                 "accuracy": accuracy,
-                "samples_processed": len(features)
+                "samples_processed": len(features),
+                "device_used": str(device)
             }
         else:
             # Inference only
             predicted = torch.argmax(outputs, dim=1)
             metrics = {
                 "predictions": predicted.cpu().tolist(),
-                "samples_processed": len(features)
+                "samples_processed": len(features),
+                "device_used": str(device)
             }
     
     logger.debug(f"running evaluate_model ... evaluation complete")
@@ -257,6 +385,36 @@ def handler(job):
     try:
         job_input = job["input"]
         operation = job_input.get("operation", "train_epoch")
+        
+        # GPU Information Operation
+        if operation == "gpu_info":
+            gpu_info = get_gpu_info()
+            benchmark_results = run_performance_benchmark()
+            
+            return {
+                "operation": "gpu_info",
+                "gpu_info": gpu_info,
+                "benchmark_results": benchmark_results,
+                "status": "success"
+            }
+        
+        # Performance Benchmark Operation
+        elif operation == "benchmark":
+            benchmark_results = run_performance_benchmark()
+            
+            return {
+                "operation": "benchmark",
+                "benchmark_results": benchmark_results,
+                "status": "success"
+            }
+        
+        # Training and evaluation operations require model config
+        elif operation in ["train_epoch", "evaluate", "predict"]:
+            if "model_config" not in job_input:
+                return {
+                    "error": f"Missing required 'model_config' for operation: {operation}",
+                    "status": "error"
+                }
         
         # Create or load model
         model_config = job_input["model_config"]
@@ -319,4 +477,8 @@ def handler(job):
 # Start the serverless function
 if __name__ == "__main__":
     logger.debug("running main ... starting serverless worker")
-    runpod.serverless.start({"handler": handler})
+    logger.info(f"Device initialized: {device}")
+    logger.info(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
+    runpod.serverless.start({"handler": handler}) # type: ignore
