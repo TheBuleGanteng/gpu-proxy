@@ -350,9 +350,17 @@ class RunPodServerlessProvider(GPUProviderBase):
         
         return memory_info
     
+    """
+    Enhanced run_sync method with detailed debugging.
+    Replace your run_sync method in runpod.py with this version.
+    """
+
     async def run_sync(self, config: TrainingConfig) -> TrainingResult:
         """
-        Execute synchronous training job (blocks until completion).
+        Execute synchronous training job with proper timeout handling.
+        
+        Tries /runsync first with very quick training, falls back to async polling
+        if the job takes too long or runsync fails.
         
         Args:
             config: Training configuration
@@ -374,48 +382,24 @@ class RunPodServerlessProvider(GPUProviderBase):
                 error_message="Not connected to RunPod"
             )
         
+        start_time = time.time()
+        
+        # For sync jobs, optimize the config for speed
+        sync_config = self._optimize_config_for_sync(config)
+        
         try:
-            job_payload = {
-                "input": {
-                    "training_config": self._serialize_config(config),
-                    "framework": config.framework,
-                    "max_epochs": config.max_epochs,
-                    "batch_size": config.batch_size,
-                    "learning_rate": config.learning_rate
-                }
-            }
+            # First, try the /runsync endpoint with optimized config
+            logger.info("running run_sync ... attempting /runsync endpoint")
+            return await self._try_runsync_endpoint(sync_config, start_time)
             
-            url = f"{self.base_url}/{self.endpoint_id}/runsync"
+        except asyncio.TimeoutError:
+            logger.warning("running run_sync ... /runsync timed out, falling back to async polling")
+            return await self._run_sync_via_async(config, start_time)
             
-            logger.info("running run_sync ... submitting synchronous job")
-            
-            async with self._session.post(url, json=job_payload) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    
-                    # Process synchronous result
-                    if 'output' in data:
-                        result_data = self._deserialize_result(data['output'].get('training_result', ''))
-                        return TrainingResult(**result_data)
-                    else:
-                        return TrainingResult(
-                            success=False,
-                            error_message="No output received from synchronous job"
-                        )
-                else:
-                    error_text = await response.text()
-                    logger.error(f"running run_sync ... sync job failed: {response.status} - {error_text}")
-                    return TrainingResult(
-                        success=False,
-                        error_message=f"Sync job failed: {response.status}"
-                    )
-                    
         except Exception as e:
-            logger.error(f"running run_sync ... error: {e}")
-            return TrainingResult(
-                success=False,
-                error_message=f"Sync job error: {str(e)}"
-            )
+            logger.warning(f"running run_sync ... /runsync failed: {e}")
+            logger.info("running run_sync ... falling back to async polling method")
+            return await self._run_sync_via_async(config, start_time)
     
     async def check_health(self) -> Dict[str, Any]:
         """
@@ -915,3 +899,266 @@ class RunPodServerlessProvider(GPUProviderBase):
             complexity *= 0.8
         
         return min(complexity, 5.0)  # Cap at 5x complexity
+    
+    """
+    Add these missing methods to your RunPodServerlessProvider class in runpod.py
+    Insert them after your run_sync method.
+    """
+
+    def _optimize_config_for_sync(self, config: TrainingConfig) -> TrainingConfig:
+        """
+        Optimize training config for synchronous execution (under 30 seconds).
+        
+        Args:
+            config: Original training configuration
+            
+        Returns:
+            TrainingConfig: Optimized configuration for sync execution
+        """
+        # Create optimized config for sync execution
+        optimized_config = TrainingConfig(
+            model_config={
+                **config.model_config,
+                "type": "sync_optimized",
+                "quick": True
+            },
+            training_params={
+                **config.training_params,
+                "sync_mode": True,
+                "quick_training": True
+            },
+            data_config={
+                **config.data_config,
+                "samples": min(config.data_config.get("samples", 1000), 100),  # Limit samples
+                "input_shape": config.data_config.get("input_shape", [28, 28, 1])
+            },
+            framework=config.framework,
+            max_epochs=min(config.max_epochs, 2),  # Max 2 epochs for sync
+            batch_size=min(config.batch_size, 16),  # Smaller batch size
+            learning_rate=config.learning_rate,
+            early_stopping=config.early_stopping,
+            save_checkpoints=False  # No checkpoints for sync jobs
+        )
+        
+        logger.debug(f"running _optimize_config_for_sync ... optimized: epochs={optimized_config.max_epochs}, samples={optimized_config.data_config.get('samples')}")
+        
+        return optimized_config
+
+
+    async def _try_runsync_endpoint(self, config: TrainingConfig, start_time: float) -> TrainingResult:
+        """
+        Try the RunPod /runsync endpoint with proper timeout handling.
+        
+        Args:
+            config: Training configuration
+            start_time: Job start time
+            
+        Returns:
+            TrainingResult: Training results
+            
+        Raises:
+            asyncio.TimeoutError: If request times out
+            Exception: If other errors occur
+        """
+        job_payload = {
+            "input": {
+                "training_config": self._serialize_config(config),
+                "framework": config.framework,
+                "max_epochs": config.max_epochs,
+                "batch_size": config.batch_size,
+                "learning_rate": config.learning_rate,
+                "sync_mode": True  # Signal to handler this is a sync job
+            }
+        }
+        
+        url = f"{self.base_url}/{self.endpoint_id}/runsync"
+        
+        # Set aggressive timeout for sync jobs (25 seconds, less than RunPod's 30s limit)
+        timeout = aiohttp.ClientTimeout(total=25)
+        
+        logger.info(f"running _try_runsync_endpoint ... submitting to {url}")
+        logger.debug(f"running _try_runsync_endpoint ... payload size: {len(json.dumps(job_payload))} bytes")
+        
+        async with self._session.post(url, json=job_payload, timeout=timeout) as response:
+            response_text = await response.text()
+            
+            logger.info(f"running _try_runsync_endpoint ... response status: {response.status}")
+            logger.debug(f"running _try_runsync_endpoint ... response: {response_text[:200]}...")
+            
+            if response.status == 200:
+                try:
+                    data = json.loads(response_text) if response_text else {}
+                    
+                    if 'output' in data:
+                        output = data['output']
+                        
+                        # Handle successful training result
+                        if output.get('success') or 'training_result' in output:
+                            if 'training_result' in output:
+                                result_data = self._deserialize_result(output['training_result'])
+                            else:
+                                result_data = output
+                            
+                            return TrainingResult(
+                                success=result_data.get('success', True),
+                                final_loss=result_data.get('final_loss'),
+                                final_accuracy=result_data.get('final_accuracy'),
+                                training_history=result_data.get('training_history', {}),
+                                duration_seconds=time.time() - start_time,
+                                error_message=result_data.get('error_message')
+                            )
+                        else:
+                            # Handle error in output
+                            error_msg = output.get('error', 'Unknown error from sync job')
+                            logger.error(f"running _try_runsync_endpoint ... job failed: {error_msg}")
+                            raise Exception(f"Sync job failed: {error_msg}")
+                    else:
+                        logger.error(f"running _try_runsync_endpoint ... no output in response: {data}")
+                        raise Exception(f"No output in sync response: {data}")
+                        
+                except json.JSONDecodeError as e:
+                    logger.error(f"running _try_runsync_endpoint ... JSON decode error: {e}")
+                    raise Exception(f"Invalid JSON response: {response_text[:100]}")
+                    
+            elif response.status == 408:  # Request timeout
+                logger.error("running _try_runsync_endpoint ... request timed out")
+                raise asyncio.TimeoutError("Sync job request timed out")
+                
+            elif response.status == 404:
+                logger.error("running _try_runsync_endpoint ... runsync endpoint not found")
+                raise Exception("runsync endpoint not available")
+                
+            else:
+                logger.error(f"running _try_runsync_endpoint ... HTTP error: {response.status}")
+                raise Exception(f"HTTP {response.status}: {response_text}")
+
+
+    async def _run_sync_via_async(self, config: TrainingConfig, start_time: float) -> TrainingResult:
+        """
+        Execute synchronous training using async endpoint with polling.
+        
+        This provides a reliable fallback when /runsync fails or times out.
+        
+        Args:
+            config: Training configuration
+            start_time: Job start time
+            
+        Returns:
+            TrainingResult: Training results
+        """
+        logger.info("running _run_sync_via_async ... using async endpoint with polling")
+        
+        job_id = None
+        
+        try:
+            # Submit job using regular async endpoint
+            job_id = await self._submit_training_job(config)
+            
+            if not job_id:
+                return TrainingResult(
+                    success=False,
+                    error_message="Failed to submit training job via async endpoint",
+                    duration_seconds=time.time() - start_time
+                )
+            
+            logger.info(f"running _run_sync_via_async ... job {job_id} submitted, polling for completion")
+            
+            # Poll for completion with faster intervals for sync jobs
+            poll_interval = 1.0  # 1 second for sync jobs
+            max_wait_time = 120  # 2 minutes max for sync jobs
+            timeout_time = start_time + max_wait_time
+            
+            last_status_log = time.time()
+            
+            while time.time() < timeout_time:
+                # Check job status
+                status_data = await self._get_job_status(job_id)
+                
+                if not status_data:
+                    await asyncio.sleep(poll_interval)
+                    continue
+                
+                job_status = status_data.get('status', 'UNKNOWN')
+                
+                # Log status every 10 seconds
+                if time.time() - last_status_log > 10:
+                    elapsed = time.time() - start_time
+                    logger.info(f"running _run_sync_via_async ... job {job_id} status: {job_status} (elapsed: {elapsed:.1f}s)")
+                    last_status_log = time.time()
+                
+                if job_status == 'COMPLETED':
+                    logger.info(f"running _run_sync_via_async ... job {job_id} completed")
+                    
+                    # Process completed job
+                    output = status_data.get('output', {})
+                    
+                    if 'training_result' in output:
+                        result_data = self._deserialize_result(output['training_result'])
+                        
+                        return TrainingResult(
+                            success=result_data.get('success', False),
+                            final_loss=result_data.get('final_loss'),
+                            final_accuracy=result_data.get('final_accuracy'),
+                            training_history=result_data.get('training_history', {}),
+                            duration_seconds=time.time() - start_time,
+                            error_message=result_data.get('error_message')
+                        )
+                    elif output.get('success') is not None:
+                        # Direct output format
+                        return TrainingResult(
+                            success=output.get('success', False),
+                            final_accuracy=output.get('final_accuracy'),
+                            final_loss=output.get('final_loss'),
+                            error_message=output.get('error'),
+                            duration_seconds=time.time() - start_time
+                        )
+                    else:
+                        return TrainingResult(
+                            success=False,
+                            error_message=f"No training results in completed job: {list(output.keys())}",
+                            duration_seconds=time.time() - start_time
+                        )
+                
+                elif job_status == 'FAILED':
+                    error_msg = status_data.get('output', {}).get('error', 'Unknown error')
+                    logger.error(f"running _run_sync_via_async ... job {job_id} failed: {error_msg}")
+                    
+                    return TrainingResult(
+                        success=False,
+                        error_message=f"Training job failed: {error_msg}",
+                        duration_seconds=time.time() - start_time
+                    )
+                
+                elif job_status in ['IN_PROGRESS', 'IN_QUEUE']:
+                    # Still running, continue polling
+                    pass
+                else:
+                    logger.warning(f"running _run_sync_via_async ... unknown job status: {job_status}")
+                
+                await asyncio.sleep(poll_interval)
+            
+            # Timeout reached
+            logger.error(f"running _run_sync_via_async ... job {job_id} timed out after {max_wait_time}s")
+            
+            # Try to cancel the timed-out job
+            if job_id:
+                await self.cancel_job(job_id)
+            
+            return TrainingResult(
+                success=False,
+                error_message=f"Synchronous job timed out after {max_wait_time} seconds",
+                duration_seconds=time.time() - start_time
+            )
+            
+        except Exception as e:
+            logger.error(f"running _run_sync_via_async ... error: {e}")
+            
+            # Cleanup job on error
+            if job_id:
+                await self.cancel_job(job_id)
+            
+            return TrainingResult(
+                success=False,
+                error_message=f"Sync job via async error: {str(e)}",
+                duration_seconds=time.time() - start_time
+            )

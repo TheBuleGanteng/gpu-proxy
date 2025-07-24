@@ -1,0 +1,41 @@
+# Core ML framework - TensorFlow 2.19.0 with CUDA support
+tensorflow[and-cuda]==2.19.0
+
+# Core scientific computing (compatible with TensorFlow 2.19.0)
+# Note: numpy version will be determined by TensorFlow requirements
+pandas>=2.0.0
+scipy>=1.13.1
+scikit-learn>=1.3.0
+
+# RunPod serverless (FIXED - single entry with correct version)
+runpod>=1.7.0
+
+# Image processing and computer vision
+Pillow>=10.0.0
+opencv-python-headless>=4.8.0
+albumentations>=1.3.0
+
+# Data visualization and monitoring
+matplotlib>=3.6.0
+seaborn>=0.12.0
+plotly>=5.15.0
+
+# Progress tracking and utilities
+tqdm>=4.65.0
+psutil>=5.9.0
+
+# Model utilities
+timm>=0.9.0
+
+# HTTP and API utilities
+requests>=2.31.0
+aiohttp>=3.8.0
+
+# Configuration and environment
+python-dotenv>=1.0.0
+
+# Optimization and hyperparameter tuning
+optuna>=3.2.0
+
+# Memory management and caching
+joblib>=1.3.0
