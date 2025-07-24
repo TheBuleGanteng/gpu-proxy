@@ -1,73 +1,28 @@
-# Clean Multi-stage Dockerfile with Proper Dependency Separation
+# Use RunPod's official PyTorch base image to avoid random device issues
+FROM runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel-ubuntu22.04
 
-# Stage 1: Base environment with system dependencies only
-FROM nvidia/cuda:12.3.2-devel-ubuntu22.04 as base
-
-ENV PYTHONUNBUFFERED=1
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONPATH=/app
-ENV TZ=Asia/Jakarta
-
-# Install ONLY system-level dependencies
-RUN apt-get update && apt-get install -y \
-    # Python runtime (but NOT Python packages)
-    python3 \
-    python3-pip \
-    python3-dev \
-    # Build tools
-    build-essential \
-    git \
-    wget \
-    curl \
-    # System libraries needed by Python packages
-    libhdf5-dev \
-    pkg-config \
-    libgl1-mesa-dev \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgomp1 \
-    # CUDA deep learning libraries (system level)
-    libcudnn8 \
-    libcudnn8-dev \
-    # Timezone data
-    tzdata \
-    && rm -rf /var/lib/apt/lists/*
-
-# Configure timezone
-RUN ln -snf /usr/share/zoneinfo/Asia/Jakarta /etc/localtime && \
-    echo "Asia/Jakarta" > /etc/timezone && \
-    dpkg-reconfigure -f noninteractive tzdata
-
-# Verify Python installation
-RUN python3 --version && \
-    python3 -m pip --version && \
-    ln -sf /usr/bin/python3 /usr/bin/python
-
+# Set working directory
 WORKDIR /app
 
-# Stage 2: Python dependencies
-FROM base as dependencies
+# Install additional Python packages
+RUN pip install --no-cache-dir \
+    runpod>=1.7.0 \
+    numpy \
+    requests
 
-# Copy requirements.txt ONLY
-COPY requirements.txt .
+# Copy the handler (with corrected logging)
+COPY handler.py /app/handler.py
 
-# Clean requirements.txt and install Python packages ONLY
-RUN sed -i 's/scipy==1.16.0/scipy==1.13.1/g' requirements.txt && \
-    python3 -m pip install --no-cache-dir --upgrade pip && \
-    python3 -m pip install --no-cache-dir -r requirements.txt
+# Create test input file for local testing
+RUN echo '{"input": {"operation": "train_epoch", "model_config": {"type": "sequential", "layers": [{"type": "linear", "in_features": 10, "out_features": 3}]}, "training_data": {"features": [[1,2,3,4,5,6,7,8,9,10], [2,3,4,5,6,7,8,9,10,11]], "labels": [0, 1]}, "hyperparameters": {"optimizer": "adam", "learning_rate": 0.001, "loss_function": "cross_entropy"}}}' > /app/test_input.json
 
-# Create directories
-RUN mkdir -p /app/logs /app/optimization_results
+# Set timezone to Jakarta
+ENV TZ=Asia/Jakarta
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Stage 3: Application code
-FROM dependencies as final
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
 
-# Copy application files
-COPY . .
-
-# Set permissions
-RUN chmod +x /app/handler.py
-
-CMD ["python3", "handler.py"]
+# Start the handler
+CMD ["python", "handler.py"]
