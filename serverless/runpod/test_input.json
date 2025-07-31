@@ -1,8 +1,0 @@
-{
-  "input": {
-    "training_config": "",
-    "framework": "tensorflow",
-    "max_epochs": 2,
-    "batch_size": 32
-  }
-}

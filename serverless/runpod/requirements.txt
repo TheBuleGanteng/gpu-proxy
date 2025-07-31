@@ -1,9 +1,0 @@
-# RunPod serverless
-runpod>=1.7.0
-
-# Core dependencies (PyTorch is already in base image)
-numpy
-requests
-
-# Optional for enhanced functionality
-scikit-learn
