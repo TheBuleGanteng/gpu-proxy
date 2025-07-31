@@ -209,3 +209,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Docker image name
+last_deployed_image.txt
