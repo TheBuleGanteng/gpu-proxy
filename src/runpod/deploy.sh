@@ -125,10 +125,10 @@ if [ -f "$ENV_FILE" ]; then
     DOCKER_USERNAME=$(grep "^DOCKER_HUB_USERNAME=" "$ENV_FILE" | cut -d '=' -f2 | tr -d '"')
 fi
 
-# If not found in .env, use thebuleganteng (your existing username)
+# If not found in .env, terminate the script with an error
 if [ -z "$DOCKER_USERNAME" ]; then
-    DOCKER_USERNAME="thebuleganteng"  # Default to your existing username
-    print_status "Using default Docker Hub username: $DOCKER_USERNAME"
+    echo -e "${RED}[ERROR]${NC} DOCKER_HUB_USERNAME is not set in the .env file. Please set it and try again."
+    exit 1
 else
     print_success "Using Docker Hub username from .env: $DOCKER_USERNAME"
 fi
