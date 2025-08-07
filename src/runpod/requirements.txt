@@ -5,8 +5,10 @@ runpod>=1.7.0
 numpy
 requests
 
-# Fat Image ML Libraries - Pre-installed for fast execution
-tensorflow>=2.13.0
+# TensorFlow with explicit CUDA support
+tensorflow[and-cuda]>=2.13.0
+
+# ML Libraries - Pre-installed for fast execution
 optuna>=3.0.0
 scikit-learn>=1.3.0
 
