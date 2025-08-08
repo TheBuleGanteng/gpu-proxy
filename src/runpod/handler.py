@@ -270,10 +270,9 @@ Final Optimized Handler - Minimal Response for RunPod Size Limits
 """
 
 # Replace your current handler function with this ultra-optimized version:
-
 def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     """
-    TYPE-SAFE: NaN-safe minimal response handler with proper types
+    Project-agnostic handler - returns complete execution results without parsing
     """
     logger.debug("running handler ... processing job request")
     
@@ -281,74 +280,20 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
         job_input = job.get("input", {})
         operation = job_input.get("operation", "execute_code")
         
-        # Execute Code Operation (TYPE-SAFE NaN-SAFE RESPONSE)
+        # Execute Code Operation - return complete execution_result
         if operation == "execute_code":
             code = job_input.get("code", "")
             context = job_input.get("context", {})
             timeout = job_input.get("timeout_seconds", 300)
             
             if not code:
-                return {"error": "No code", "status": "error"}
+                return {"error": "No code provided", "success": False}
             
             execution_result = execute_code(code, context, timeout)
+            logger.info(f"running handler ... execution completed, success: {execution_result.get('success')}")
             
-            # TYPE-SAFE NaN-safe minimal response
-            if execution_result.get("success"):
-                result_data = execution_result.get("result", {})
-                
-                # Start with bare minimum - properly typed
-                minimal_response: Dict[str, Any] = {"success": True}
-                
-                # Add ONLY essential training results with NaN handling
-                if isinstance(result_data, dict):
-                    history = result_data.get('history', {})
-                    if history:
-                        # Helper function to safely convert metrics
-                        def safe_metric(value: Any) -> float:
-                            """Convert metric to safe float, replacing NaN/inf with 0.0"""
-                            try:
-                                float_val = float(value)
-                                # Check for NaN (NaN != NaN in Python)
-                                if float_val != float_val:  # This is the NaN check
-                                    return 0.0
-                                # Check for infinity
-                                if float_val == float('inf') or float_val == float('-inf'):
-                                    return 0.0
-                                return round(float_val, 3)
-                            except (ValueError, TypeError, OverflowError):
-                                return 0.0
-                        
-                        # Only final metrics - NaN-safe with proper typing
-                        if 'loss' in history and history['loss']:
-                            minimal_response['loss'] = safe_metric(history['loss'][-1])
-                        if 'accuracy' in history and history['accuracy']:
-                            minimal_response['acc'] = safe_metric(history['accuracy'][-1])
-                        if 'val_loss' in history and history['val_loss']:
-                            minimal_response['val_loss'] = safe_metric(history['val_loss'][-1])
-                        if 'val_accuracy' in history and history['val_accuracy']:
-                            minimal_response['val_acc'] = safe_metric(history['val_accuracy'][-1])
-                        
-                        minimal_response['epochs'] = len(history.get('loss', []))
-                    
-                    # Optional: model params (also make safe)
-                    if 'model_params' in result_data:
-                        try:
-                            params = int(result_data['model_params'])
-                            minimal_response['params'] = params
-                        except (ValueError, TypeError):
-                            pass  # Skip if invalid
-                
-                # Log for monitoring
-                response_size = len(str(minimal_response))
-                logger.info(f"TYPE-SAFE RESPONSE SIZE: {response_size} chars")
-                logger.info(f"TYPE-SAFE RESPONSE: {minimal_response}")
-                
-                return minimal_response
-            
-            else:
-                # Ultra minimal error
-                error_msg = execution_result.get("error", "Err")
-                return {"success": False, "error": str(error_msg)[:20]}
+            # Return the COMPLETE execution result - no project-specific parsing
+            return execution_result
         
         # Other operations - minimal
         elif operation == "health_check":
@@ -358,11 +303,11 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
             return {"gpu": torch.cuda.is_available() if torch else False}
         
         else:
-            return {"error": "Unknown op"}
+            return {"error": "Unknown operation", "success": False}
             
     except Exception as e:
         logger.error(f"running handler ... error: {str(e)}")
-        return {"error": str(e)[:20]}
+        return {"error": str(e), "success": False}
 
 # Start the serverless function
 if __name__ == "__main__":

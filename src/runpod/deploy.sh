@@ -65,7 +65,11 @@ fi
 print_status "🧪 Validating fat image ML libraries..."
 
 # Core ML frameworks
-if ! grep -q "tensorflow>=2.13.0" requirements.txt && ! grep -q "tensorflow\[and-cuda\]>=2.13.0" requirements.txt; then
+# Core ML frameworks - Updated to handle exact version pinning
+if ! grep -q "tensorflow>=2.13.0" requirements.txt && \
+   ! grep -q "tensorflow\[and-cuda\]>=2.13.0" requirements.txt && \
+   ! grep -q "tensorflow\[and-cuda\]==2.19.0" requirements.txt && \
+   ! grep -q "tensorflow==2.19.0" requirements.txt; then
     print_error "TensorFlow >= 2.13.0 (with CUDA support) not found in requirements.txt"
     exit 1
 fi

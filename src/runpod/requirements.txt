@@ -3,10 +3,13 @@ runpod>=1.7.0
 
 # Core dependencies (PyTorch is already in base image)
 numpy
-requests
 
-# TensorFlow with explicit CUDA support
-tensorflow[and-cuda]>=2.13.0
+# TensorFlow with explicit CUDA support - PINNED TO MATCH LOCAL
+# Target: tensorflow==2.19.0, keras==3.10.0
+tensorflow[and-cuda]==2.19.0
+
+# CRITICAL: Pin Keras to 3.10.0 to avoid validation_split regression bug in 3.11.x
+keras==3.10.0
 
 # ML Libraries - Pre-installed for fast execution
 optuna>=3.0.0
